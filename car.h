@@ -23,6 +23,6 @@ typedef struct Header Header;
 extern void usage(void);
 extern void BuildCRCTable(void);
 extern unsigned int CalculateCRC32(unsigned int count, unsigned int crc, void *buffer);
-
+extern int ParseArguments(int argc,char *argv[]);
 
 #endif //CAR_H
