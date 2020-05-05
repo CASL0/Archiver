@@ -3,9 +3,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdint.h>
 
 //32ビットCRC値を計算するためのCRCテーブル
-static unsigned int C32Table[256];
+static uint32_t C32Table[256];
 //コマンドラインで指定されたCARファイルの名前
 static char CarFileName[FILENAME_MAX];
 //入力CARファイル
@@ -22,7 +23,7 @@ static HEADER Header;
  void usage(void){
 	fprintf(stderr,"CAR -- Compressed ARchiver\n\n"); 
 	fprintf(stderr,"usage: car command car-file [file ...]\n\n");
-	fprintf(stderr,"Commands: \n");
+	fprintf(stderr,"commands: \n");
 	fprintf(stderr,"  a：ファイルをアーカイブに追加する\n");
 	fprintf(stderr,"  x：ファイルをアーカイブから取り出す\n");
 	fprintf(stderr,"  r：アーカイブのファイルを置換する\n");
@@ -34,7 +35,7 @@ static HEADER Header;
 
 void BuildCRCTable(void){
 	for(int i=0;i<=256;i++){
-		unsigned int value=i;
+		uint32_t value=i;
 		for(int j=8;j>0;j--){
 			value=(value & 1)?(value >> 1)^CRC32_POLYNOMIAL:value>>1;
 		}
@@ -42,9 +43,9 @@ void BuildCRCTable(void){
 	}
 }
 
-unsigned int CalculateCRC32(unsigned int count, unsigned int crc, void *buffer){
+uint32_t CalculateCRC32(uint32_t count, uint32_t crc, void *buffer){
 	unsigned char *p=(unsigned char*)buffer;
-	unsigned int tmp1,tmp2;
+	uint32_t tmp1,tmp2;
 	while(count--!=0){
 		tmp1=(crc>>8) & 0x00ffffff;	
 		tmp2=C32Table[((int)crc^*p++) & 0xff];
@@ -180,11 +181,58 @@ int AddFileList(void){
 			fclose(input_text_file);	
 		}else{
 			strcpy(Header.file_name,FileList[i]);
-			insert(input_text_file,"追加");	
+			insert(input_text_file,"Adding");	
 		}
 	}
 	return i;
 }
 
 void insert(FILE *input_text_file,char *operation){
+	fprintf(stderr,"%s %s\n",operation,Header.file_name);
+	long saved_pos_header=ftell(OutputCarFile);
+	Header.compression_method=2;	
+	WriteFileHeader();
+
+
+}
+
+void WriteFileHeader(void){
+	int i=0;	
+	for(;;){
+		putc(Header.file_name[i],OutputCarFile);
+		if(Header.file_name[i++]=='\0'){
+			break;	
+		}
+	}
+	unsigned char header_data[HEADER_BLOCK_SIZE];
+	Header.header_crc=CalculateCRC32(i,CRC_MASK,Header.file_name);
+	int num_byte=1;
+	pack(num_byte,(uint32_t)Header.compression_method,header_data+0);
+	num_byte=4;
+	pack(num_byte,Header.original_size,header_data+1);
+	pack(num_byte,Header.compressed_size,header_data+5);
+	pack(num_byte,Header.original_crc,header_data+9);
+	Header.header_crc=CalculateCRC32(13,Header.header_crc,header_data);
+	Header.header_crc^=CRC_MASK;
+	pack(num_byte,Header.header_crc,header_data+13);
+	fwrite(header_data,1,HEADER_BLOCK_SIZE,OutputCarFile);	
+}
+
+void pack(int num_bytes,uint32_t number, unsigned char *buffer){
+	while(num_bytes-->0){
+		//8ビットずつバッファに出力
+		//書き込むデータnumberの下位8ビットをバッファに出力	
+		*buffer++=(unsigned char)(number & 0xff);	
+		number>>=8;
+	}
+}
+
+uint32_t unpack(int num_bytes,unsigned char *buffer){
+	uint32_t result=0;
+	int shift_count=0;
+	while(num_bytes-->0){
+		result|=(uint32_t)*buffer++ << shift_count;
+		shift_count+=8;	
+	}
+	return result;
 }
