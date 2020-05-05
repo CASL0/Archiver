@@ -16,6 +16,8 @@ static char TmpFileName[FILENAME_MAX];
 static FILE *OutputCarFile;
 //アーカイブするファイルのリスト
 static char *FileList[FILE_LIST_MAX];
+//現在処理中のファイルのヘッダ
+static HEADER Header;
 
  void usage(void){
 	fprintf(stderr,"CAR -- Compressed ARchiver\n\n"); 
@@ -139,4 +141,50 @@ void BuildFileList(int argc, char *argv[], int command){
 		}
 	}
 	FileList[count]=NULL;	
+}
+
+int AddFileList(void){
+	FILE *input_text_file;	
+	int i=0;
+	for(;FileList[i]!=NULL;i++){
+		input_text_file=fopen(FileList[i],"rb");
+		if(input_text_file==NULL){
+			fprintf(stderr,"入力ファイル%sを開けませんでした\n",FileList[i]);	
+			exit(1);	
+		}
+		//ファイル名の先頭を指すようにパスを下る	
+		char *s=strrchr(FileList[i],'/');
+		if(s!=NULL){
+			s++;	
+		}else{
+			s=FileList[i];	
+		}
+		//パスで入力されていた場合ファイル名以外を消去	
+		if(s!=FileList[i]){
+			int j=0;
+			for(;s[j]!='\0';j++){
+				FileList[i][j]=s[j];	
+			}
+			FileList[i][j]='\0';
+		}
+		//ファイルの重複をチェックする
+		int skip=0;
+		for(int j=0;j<i;j++){
+			if(strcmp(FileList[j],s)==0){
+				fprintf(stderr,"ファイル%sが重複しています\n",FileList[i]);	
+				skip=1;	
+				break;	
+			}
+		}
+		if(skip){
+			fclose(input_text_file);	
+		}else{
+			strcpy(Header.file_name,FileList[i]);
+			insert(input_text_file,"追加");	
+		}
+	}
+	return i;
+}
+
+void insert(FILE *input_text_file,char *operation){
 }

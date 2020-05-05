@@ -11,5 +11,9 @@ int main(int argc,char *argv[]){
 	fprintf(stderr,"\n");
 	OpenArchiveFiles(argv[2],command);
 	BuildFileList(argc-3,argv+3,command);	
+	int count=0;
+	if(command=='a'){
+		count=AddFileList();	
+	}
 	return 0;
 }

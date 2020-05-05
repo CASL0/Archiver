@@ -1,6 +1,8 @@
 #ifndef CAR_H
 #define CAR_H
 
+#include <stdio.h>
+
 #define BASE_HEADER_SIZE 19
 #define CRC_MASK 0xffffffff
 #define CRC32_POLYNOMIAL 0xedb88320
@@ -28,6 +30,6 @@ extern unsigned int CalculateCRC32(unsigned int count, unsigned int crc, void *b
 extern int ParseArguments(int argc,char *argv[]);
 extern void OpenArchiveFiles(char *name, int command);
 extern void BuildFileList(int argc, char *argv[], int command);
-
-
+extern int AddFileList(void); 
+extern void insert(FILE *input_text_file,char *operation);
 #endif //CAR_H
