@@ -6,6 +6,16 @@
 
 //32ビットCRC値を計算するためのCRCテーブル
 static unsigned int C32Table[256];
+//コマンドラインで指定されたCARファイルの名前
+static char CarFileName[FILENAME_MAX];
+//入力CARファイル
+static FILE *InputCarFile;
+//出力用CARファイルはまず一時的な名前でオープンされる
+static char TmpFileName[FILENAME_MAX];
+//出力用CARファイル
+static FILE *OutputCarFile;
+//アーカイブするファイルのリスト
+static char *FileList[FILE_LIST_MAX];
 
  void usage(void){
 	fprintf(stderr,"CAR -- Compressed ARchiver\n\n"); 
@@ -73,4 +83,60 @@ int ParseArguments(int argc,char *argv[]){
 			usage();
 	}
 	return command;
+}
+
+void OpenArchiveFiles(char *name, int command){
+	strncpy(CarFileName,name,FILENAME_MAX-1);
+	CarFileName[FILENAME_MAX-1]='\0';	
+	InputCarFile=fopen(CarFileName,"rb");
+
+	char *s;
+	//拡張子を補完する
+	if(InputCarFile==NULL){
+		//ファイル名までパスを下る
+		s=strrchr(CarFileName,'/');	
+		if(s==NULL){
+			s=CarFileName;
+		}
+		if(strrchr(s,'.')==NULL){
+			if(strlen(CarFileName)<(FILENAME_MAX - 4)){
+				strcat(CarFileName,".car");
+				InputCarFile=fopen(CarFileName,"rb");	
+			}
+		}
+	}
+	if(InputCarFile==NULL && command != 'a'){
+		fprintf(stderr,"アーカイブ%sを開けませんでした\n",CarFileName);	
+		exit(1);
+	}
+	if(command=='a' || command=='r' || command=='d'){
+		strcpy(TmpFileName,CarFileName);
+		strcat(TmpFileName,".tmp");	
+		OutputCarFile=fopen(TmpFileName,"wb");	
+		if(OutputCarFile==NULL){
+			fprintf(stderr,"一時ファイル%sを開けませんでした\n",TmpFileName);
+			exit(1);	
+		}
+	}
+}
+
+void BuildFileList(int argc, char *argv[], int command){
+	int count=0;
+	if(argc==0){
+		FileList[count++]="*";	
+	}else{
+		for(int i=0;i<argc;i++){
+			FileList[count]=malloc(strlen(argv[i])+2);	
+			if(FileList[count]==NULL){
+				fprintf(stderr,"ファイル名が長すぎます\n");
+				exit(1);	
+			}
+			strcpy(FileList[count++],argv[i]);	
+			if(count>=FILE_LIST_MAX){
+				fprintf(stderr,"ファイルが多すぎます");
+				exit(1);	
+			}
+		}
+	}
+	FileList[count]=NULL;	
 }
