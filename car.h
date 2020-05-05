@@ -9,6 +9,8 @@
 #define CRC32_POLYNOMIAL 0xedb88320
 #define FILE_LIST_MAX 100
 #define HEADER_BLOCK_SIZE 17
+#define BUFFER_SIZE 256
+
 
 #ifndef FILENAME_MAX
 #define FILENAME_MAX 128
@@ -38,4 +40,11 @@ extern void WriteFileHeader(void);
 //ファイルに出力する前にbufferに書き込むデータを格納する
 extern void pack(int num_bytes,uint32_t number, unsigned char *buffer);
 extern uint32_t unpack(int num_bytes,unsigned char *buffer);
+extern int ProcessAllFiles(int command,int count);
+extern void SkipOverFile(void);
+extern void CopyFile(void);
+extern int SearchFileList(char *file_name);
+extern int WildCardMatch(char *string,char *wild_string);
+extern int ReadFileHeader(void);
+extern void extract(FILE *destination);
 #endif //CAR_H
