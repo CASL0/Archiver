@@ -8,13 +8,13 @@
 //32ビットCRC値を計算するためのCRCテーブル
 static uint32_t C32Table[256];
 //コマンドラインで指定されたCARファイルの名前
-static char CarFileName[FILENAME_MAX];
+char CarFileName[FILENAME_MAX];
 //入力CARファイル
-static FILE *InputCarFile;
+FILE *InputCarFile;
 //出力用CARファイルはまず一時的な名前でオープンされる
-static char TmpFileName[FILENAME_MAX];
+char TmpFileName[FILENAME_MAX];
 //出力用CARファイル
-static FILE *OutputCarFile;
+FILE *OutputCarFile;
 //アーカイブするファイルのリスト
 static char *FileList[FILE_LIST_MAX];
 //現在処理中のファイルのヘッダ
@@ -34,7 +34,7 @@ static HEADER Header;
 }
 
 void BuildCRCTable(void){
-	for(int i=0;i<=256;i++){
+	for(int i=0;i<256;i++){
 		uint32_t value=i;
 		for(int j=8;j>0;j--){
 			value=(value & 1)?(value >> 1)^CRC32_POLYNOMIAL:value>>1;
@@ -51,6 +51,13 @@ uint32_t CalculateCRC32(uint32_t count, uint32_t crc, void *buffer){
 		tmp2=C32Table[((int)crc^*p++) & 0xff];
 		crc=tmp1^tmp2;
 	}
+	return crc;
+}
+
+uint32_t UpdateCharacterCRC32(uint32_t crc, int c){
+	uint32_t tmp1=(crc>>8) & 0x00ffffff;
+	uint32_t tmp2=C32Table[((int)crc^c)&0xff];
+	crc=tmp1^tmp2;
 	return crc;
 }
 
@@ -114,7 +121,11 @@ void OpenArchiveFiles(char *name, int command){
 	}
 	if(command=='a' || command=='r' || command=='d'){
 		strcpy(TmpFileName,CarFileName);
-		strcat(TmpFileName,".tmp");	
+		s=strrchr(TmpFileName,'.');
+		if(s==NULL){
+			s=TmpFileName+strlen(TmpFileName);
+		}
+		sprintf(s,".tmp");	
 		OutputCarFile=fopen(TmpFileName,"wb");	
 		if(OutputCarFile==NULL){
 			fprintf(stderr,"一時ファイル%sを開けませんでした\n",TmpFileName);
@@ -131,7 +142,7 @@ void BuildFileList(int argc, char *argv[], int command){
 		for(int i=0;i<argc;i++){
 			FileList[count]=malloc(strlen(argv[i])+2);	
 			if(FileList[count]==NULL){
-				fprintf(stderr,"ファイル名が長すぎます\n");
+				fprintf(stderr,"メモリの割当に失敗しました\n");
 				exit(1);	
 			}
 			strcpy(FileList[count++],argv[i]);	
@@ -189,6 +200,7 @@ int AddFileList(void){
 
 void insert(FILE *input_text_file,char *operation){
 	fprintf(stderr,"%s %s\n",operation,Header.file_name);
+	//圧縮後が元のサイズよりも大きくなった場合に戻ってこれるようにカーソルを保存	
 	long saved_pos_header=ftell(OutputCarFile);
 	Header.compression_method=2;	
 	WriteFileHeader();
@@ -196,9 +208,61 @@ void insert(FILE *input_text_file,char *operation){
 	fseek(input_text_file,0,SEEK_END);
 	Header.original_size=ftell(input_text_file);
 	fseek(input_text_file,0,SEEK_SET);
-
+	if(!LZSSCompress(input_text_file)){
+		Header.compression_method=1;
+		fseek(OutputCarFile,saved_pos_file,SEEK_SET);
+		rewind(input_text_file);
+		store(input_text_file);	
+	}
+	fclose(input_text_file);
+	fseek(OutputCarFile,saved_pos_header,SEEK_SET);
+	WriteFileHeader();
+	fseek(OutputCarFile,0,SEEK_END);
 
 }
+
+int store(FILE *input_text_file){
+	char buffer[BUFFER_SIZE];
+	Header.original_crc=CRC_MASK;
+	int n;
+	while((n=fread(buffer,1,BUFFER_SIZE,input_text_file))!=0){
+		fwrite(buffer,1,n,OutputCarFile);
+		Header.original_crc=CalculateCRC32(n,Header.original_crc,buffer);
+	}
+	Header.compressed_size=Header.original_size;
+	Header.original_crc^=CRC_MASK;
+	return 1;
+}
+
+uint32_t unstore(FILE *destination){
+	uint32_t crc=CRC_MASK;
+	unsigned char buffer[BUFFER_SIZE];
+	int count;	
+	while(Header.original_size!=0){
+		if(Header.original_size>BUFFER_SIZE){
+			count=BUFFER_SIZE;	
+		}else{
+			count=(int)Header.original_size;	
+		}
+		
+		if(fread(buffer,1,count,InputCarFile)!=count){
+			fprintf(stderr,"CARファイルの読み込みに失敗しました\n");
+			exit(1);	
+		}
+		if(fwrite(buffer,1,count,destination)!=count){
+			fprintf(stderr,"書き込みに失敗しました\n");
+			return ~Header.original_crc;	
+		}
+		crc=CalculateCRC32(count,crc,buffer);
+		Header.original_size-=count;	
+	}
+	return crc^CRC_MASK;
+}
+
+void WriteEndOfCarHeader(void){
+	fputc(0,OutputCarFile);
+}
+
 
 void WriteFileHeader(void){
 	int i=0;	
@@ -421,4 +485,247 @@ int ReadFileHeader(void){
 }
 
 void extract(FILE *destination){
+}
+
+
+//-- 以下，圧縮処理関係 -- 
+static char data_buffer[DATA_BUFFER_SIZE];
+static int flag_bit_mask;
+static int buffer_offset;
+
+static unsigned char window[WINDOW_SIZE]; 
+static Tree tree[WINDOW_SIZE+1];
+
+void InitOutputBuffer(void){
+	data_buffer[0]=0;
+	flag_bit_mask=1;
+	buffer_offset=1;
+}
+
+int FlushOutputBuffer(void){
+	if(buffer_offset==1){
+		return 1;	
+	}
+	Header.compressed_size+=buffer_offset;
+	if((Header.compressed_size)>=Header.original_size){
+		return 0;	
+	}
+	if(fwrite(data_buffer,1,buffer_offset,OutputCarFile)!=buffer_offset){
+		fprintf(stderr,"圧縮データの書き込みに失敗しました\n");
+		exit(1);	
+	}
+	InitOutputBuffer();
+}
+
+int OutputChar(int data){
+	data_buffer[buffer_offset++]=(char)data;
+	data_buffer[0]|=flag_bit_mask;
+	flag_bit_mask<<=1;
+	if(flag_bit_mask==0x100){
+		return FlushOutputBuffer();	
+	}else{
+		return 1;	
+	}
+}
+
+int OutputPair(int position,int length){
+	//1バイトの先頭4ビットはlength，残りの4ビットをpositionの語頭4ビットを格納	
+	data_buffer[buffer_offset]=(char)(length<<LENGTH_BIT);
+	data_buffer[buffer_offset++]|=(position>>(INDEX_BIT-LENGTH_BIT));
+	data_buffer[buffer_offset++]|=(char)(position & 0xff);
+	flag_bit_mask<<=1;
+	if(flag_bit_mask==0x100){
+		return FlushOutputBuffer();	
+	}else{
+		return 1;	
+	}
+}
+
+void InitInputBuffer(void){
+	flag_bit_mask=1;
+	data_buffer[0]=(char)getc(InputCarFile);
+}
+
+int InputBit(void){
+	if(flag_bit_mask==0x100){
+		InitInputBuffer();	
+	}
+	flag_bit_mask<<=1;
+	return data_buffer[0]&(flag_bit_mask>>1);
+}
+
+
+
+int LZSSCompress(FILE *input_text_file){
+	Header.compressed_size=0;
+	Header.original_crc=CRC_MASK;
+	InitOutputBuffer();	
+
+	int current_position=1;
+	int c;
+	int i=0;
+	for(;i<LOOK_AHEAD_SIZE;i++){
+		if((c=getc(input_text_file))==EOF){
+			break;
+		}
+		window[current_position+i]=(unsigned char)c;
+		Header.original_crc=UpdateCharacterCRC32(Header.original_crc,c);	
+	}
+	int look_ahead_size=i;
+	InitTree(current_position);
+	int match_length=0;
+	int match_position=0;
+	while(look_ahead_size>0){
+		if(match_length>look_ahead_size){
+			match_length=look_ahead_size;
+		}
+		int replace_count;
+		if(match_length<=BREAK_EVEN){
+			replace_count=1;
+			if(!OutputChar(window[current_position])){
+				return 0;	
+			}
+		}else{
+			replace_count=match_length;
+			if(!OutputPair(match_position,match_length-(BREAK_EVEN+1))){
+				return 0;	
+			}
+		}
+		for(i=0;i<replace_count;i++){
+			DeleteString(MOD_WINDOW(current_position+LOOK_AHEAD_SIZE));
+			if((c=getc(input_text_file))==EOF){
+				look_ahead_size--;
+			}else{
+				window[MOD_WINDOW(current_position+LOOK_AHEAD_SIZE)]=(unsigned char)c;
+			}
+			current_position=MOD_WINDOW(current_position+1);
+			if(look_ahead_size){
+				match_length=AddString(current_position,&match_position);
+			}
+		}
+	}
+	Header.original_crc^=CRC_MASK;
+	return FlushOutputBuffer();
+}
+
+int AddString(int new_node,int *match_position){
+	if(new_node==END_OF_STREAM){
+		return 0;
+	}
+	int current_node=tree[TREE_ROOT].larger_child;
+	int match_length=0;
+	for(;;){
+		int i=0;
+		int diff;
+		for(;i<LOOK_AHEAD_SIZE;i++){
+			diff=window[MOD_WINDOW(new_node+i)]-window[MOD_WINDOW(current_node+i)];
+			if(diff!=0){
+				break;
+			}
+		}
+		if(i>=match_length){
+			match_length=i;
+			*match_position=current_node;
+		
+			if(match_length>=LOOK_AHEAD_SIZE){
+				ReplaceNode(current_node,new_node);
+				return match_length;
+			}
+		}
+		int *child=(diff>=0)?&tree[current_node].larger_child:&tree[current_node].smaller_child;
+		if(*child==UNUSED){
+			*child=new_node;
+			tree[new_node].parent=current_node;
+			tree[new_node].smaller_child=tree[new_node].larger_child=UNUSED;
+			return match_length;
+		}
+		current_node=*child;
+	}
+}
+
+void InitTree(int root){
+	tree[TREE_ROOT].larger_child=root;
+	tree[root].parent=TREE_ROOT;
+	tree[root].smaller_child=UNUSED;
+	tree[root].larger_child=UNUSED;
+}
+
+void DeleteString(int node){
+	if(tree[node].parent==UNUSED){
+		return ;
+	}
+	if(tree[node].smaller_child==UNUSED){
+		RaiseNode(node,tree[node].larger_child);
+	}else if(tree[node].larger_child==UNUSED){
+		RaiseNode(node,tree[node].smaller_child);
+	}else{
+		int replace=LeftMost(node);
+		DeleteString(replace);
+		ReplaceNode(node,replace);
+	}
+}
+
+void RaiseNode(int old_node,int new_node){
+	tree[new_node].parent=tree[old_node].parent;
+	if(tree[tree[old_node].parent].smaller_child==old_node){
+		tree[tree[old_node].parent].smaller_child=new_node;
+	}else{
+		tree[tree[old_node].parent].larger_child=new_node;
+	}
+	tree[old_node].parent=UNUSED;
+}
+
+void ReplaceNode(int old_node,int new_node){
+	int parent=tree[old_node].parent;
+	if(tree[parent].smaller_child==old_node){
+		tree[parent].smaller_child=new_node;
+	}else{
+		tree[parent].larger_child=new_node;
+	}
+	tree[new_node]=tree[old_node];
+	tree[tree[new_node].smaller_child].parent=tree[tree[new_node].larger_child].parent=new_node;
+	tree[old_node].parent=UNUSED;
+}
+
+int LeftMost(int node){
+	node=tree[node].smaller_child;
+	while(tree[node].larger_child!=UNUSED){
+		node=tree[node].larger_child;
+	}
+	return node;
+}
+
+uint32_t LZSSExpand(FILE *output){
+	uint32_t crc=CRC_MASK;
+	ull output_count=0;
+	InitInputBuffer();
+	int current_position=1;
+	while(output_count<Header.original_size){
+		int c;
+		//フラグビットを確認して，1なら文字を読み込み，0ならインデックスと長さの組を読み込む
+		if(InputBit()){
+			c=getc(InputCarFile);
+			putc(c,output);
+			output_count++;
+			crc=UpdateCharacterCRC32(crc,c);
+			window[current_position]=(unsigned char)c;
+			current_position=MOD_WINDOW(current_position+1);
+		}else{
+			//最初の1バイトは，上位4ビットは長さで下位4ビットはインデックスの語頭4ビット
+			int match_length=getc(InputCarFile);
+			int match_position=getc(InputCarFile);
+			match_position|=(match_length & 0xf)<<(INDEX_BIT-LENGTH_BIT);
+			match_length>>=LENGTH_BIT;	
+			match_length+=BREAK_EVEN;
+			output_count+=match_length+1;	
+			for(int i=0;i<=match_length;i++){
+				c=window[MOD_WINDOW(match_position+i)];
+				putc(c,output);
+				window[current_position]=(unsigned char)c;
+				current_position=MOD_WINDOW(current_position+1);
+			}
+		}
+
+	}
+	return crc^CRC_MASK;
 }
