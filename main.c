@@ -4,8 +4,6 @@
 
 int main(int argc,char *argv[]){
 
-	extern FILE *OutputCarFile;
-	extern char *CarFileName, *TmpFileName;
 	setbuf(stdout,NULL);
 	setbuf(stderr,NULL);
 	fprintf(stderr,"CAR 1.0：");	
@@ -17,8 +15,6 @@ int main(int argc,char *argv[]){
 	int count=0;
 	if(command=='a'){
 		count=AddFileList();	
-	}else{
-		count=0;	
 	}
 	count=ProcessAllFiles(command,count);
 	if(OutputCarFile!=NULL && count!=0){
@@ -27,8 +23,14 @@ int main(int argc,char *argv[]){
 			fprintf(stderr,"書き込めませんでした\n");
 			exit(1);	
 		}
+		remove(CarFileName);	
+		rename(TmpFileName,CarFileName);
 	}
-	remove(CarFileName);
-	rename(TmpFileName,CarFileName);
+	if(command!='p'){
+		printf("\n%d個のファイル\n",count);	
+	}else{
+		fprintf(stderr,"\n%d個のファイル\n",count);	
+	}
+
 	return 0;
 }

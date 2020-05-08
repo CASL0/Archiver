@@ -5,22 +5,8 @@
 #include <ctype.h>
 #include <stdint.h>
 
-//32ビットCRC値を計算するためのCRCテーブル
-static uint32_t C32Table[256];
-//コマンドラインで指定されたCARファイルの名前
-char CarFileName[FILENAME_MAX];
-//入力CARファイル
-FILE *InputCarFile;
-//出力用CARファイルはまず一時的な名前でオープンされる
-char TmpFileName[FILENAME_MAX];
-//出力用CARファイル
-FILE *OutputCarFile;
-//アーカイブするファイルのリスト
-static char *FileList[FILE_LIST_MAX];
-//現在処理中のファイルのヘッダ
-static HEADER Header;
 
- void usage(void){
+void usage(void){
 	fprintf(stderr,"CAR -- Compressed ARchiver\n\n"); 
 	fprintf(stderr,"usage: car command car-file [file ...]\n\n");
 	fprintf(stderr,"commands: \n");
@@ -34,15 +20,17 @@ static HEADER Header;
 }
 
 void BuildCRCTable(void){
-	for(int i=0;i<256;i++){
+	for(int i=0;i<CRC_TABLE_SIZE;i++){
 		uint32_t value=i;
-		for(int j=8;j>0;j--){
+		for(int j=0;j<8;j++){
 			value=(value & 1)?(value >> 1)^CRC32_POLYNOMIAL:value>>1;
 		}
 		C32Table[i]=value;
 	}
 }
 
+//CCITT-32の計算に基づきCRCを計算する
+//引数crcをseedとして計算する
 uint32_t CalculateCRC32(uint32_t count, uint32_t crc, void *buffer){
 	unsigned char *p=(unsigned char*)buffer;
 	uint32_t tmp1,tmp2;
@@ -61,6 +49,8 @@ uint32_t UpdateCharacterCRC32(uint32_t crc, int c){
 	return crc;
 }
 
+//コマンドライン引数の解析をして，コマンドの種別を判定する
+//引数の数に問題が合った場合はusageを表示する
 int ParseArguments(int argc,char *argv[]){
 	if(argc<3 || strlen(argv[1])>1){
 		usage();	
@@ -95,6 +85,9 @@ int ParseArguments(int argc,char *argv[]){
 	return command;
 }
 
+//アーカイブファイルをオープンする
+//名前はnameで，どのようにオープンするかはcommandで指定する
+//.car拡張子が指定されていなければ補完する
 void OpenArchiveFiles(char *name, int command){
 	strncpy(CarFileName,name,FILENAME_MAX-1);
 	CarFileName[FILENAME_MAX-1]='\0';	
@@ -108,6 +101,7 @@ void OpenArchiveFiles(char *name, int command){
 		if(s==NULL){
 			s=CarFileName;
 		}
+		//ファイル名にドットが無ければ，末尾に.carを連接する	
 		if(strrchr(s,'.')==NULL){
 			if(strlen(CarFileName)<(FILENAME_MAX - 4)){
 				strcat(CarFileName,".car");
@@ -115,11 +109,18 @@ void OpenArchiveFiles(char *name, int command){
 			}
 		}
 	}
+	
+	//追加コマンドの場合は新しくアーカイブファイルを作成するのでNULLが許容される	
 	if(InputCarFile==NULL && command != 'a'){
 		fprintf(stderr,"アーカイブ%sを開けませんでした\n",CarFileName);	
 		exit(1);
 	}
+
 	if(command=='a' || command=='r' || command=='d'){
+		
+		//出力アーカイブは一時的な名前でオープンする
+		//拡張子.tmpとする
+		//すべての処理後に.carにする		
 		strcpy(TmpFileName,CarFileName);
 		s=strrchr(TmpFileName,'.');
 		if(s==NULL){
@@ -134,20 +135,21 @@ void OpenArchiveFiles(char *name, int command){
 	}
 }
 
+//コマンドライン引数から，アーカイブへ書き込むファイルリストを作成する
 void BuildFileList(int argc, char *argv[], int command){
 	int count=0;
 	if(argc==0){
 		FileList[count++]="*";	
 	}else{
 		for(int i=0;i<argc;i++){
-			FileList[count]=malloc(strlen(argv[i])+2);	
+			FileList[count]=(char*)malloc(strlen(argv[i])+2);	
 			if(FileList[count]==NULL){
-				fprintf(stderr,"メモリの割当に失敗しました\n");
+				fprintf(stderr,"メモリの確保に失敗しました\n");
 				exit(1);	
 			}
 			strcpy(FileList[count++],argv[i]);	
 			if(count>=FILE_LIST_MAX){
-				fprintf(stderr,"ファイルが多すぎます");
+				fprintf(stderr,"ファイルが多すぎます\n");
 				exit(1);	
 			}
 		}
@@ -155,6 +157,9 @@ void BuildFileList(int argc, char *argv[], int command){
 	FileList[count]=NULL;	
 }
 
+//リスト内のファイルを出力アーカイブファイルに追加する
+//パス情報はすべて取り除く
+//ファイルが重複していた場合スキップする
 int AddFileList(void){
 	FILE *input_text_file;	
 	int i=0;
@@ -171,7 +176,7 @@ int AddFileList(void){
 		}else{
 			s=FileList[i];	
 		}
-		//パスで入力されていた場合ファイル名以外を消去	
+		//パスで入力されていた場合，パス情報を消去	
 		if(s!=FileList[i]){
 			int j=0;
 			for(;s[j]!='\0';j++){
@@ -198,9 +203,12 @@ int AddFileList(void){
 	return i;
 }
 
+//入力ファイルに対して圧縮処理を施したデータを出力アーカイブに書き込む
 void insert(FILE *input_text_file,char *operation){
 	fprintf(stderr,"%s %s\n",operation,Header.file_name);
-	//圧縮後が元のサイズよりも大きくなった場合に戻ってこれるようにカーソルを保存	
+	
+	//圧縮後が元のサイズよりも大きくなった場合，やり直す
+	//やり直す際に戻ってこれるようにカーソルを保存
 	long saved_pos_header=ftell(OutputCarFile);
 	Header.compression_method=2;	
 	WriteFileHeader();
@@ -208,19 +216,25 @@ void insert(FILE *input_text_file,char *operation){
 	fseek(input_text_file,0,SEEK_END);
 	Header.original_size=ftell(input_text_file);
 	fseek(input_text_file,0,SEEK_SET);
+	
+	//圧縮後にサイズが拡大した場合は，生のデータを書き込む
 	if(!LZSSCompress(input_text_file)){
 		Header.compression_method=1;
 		fseek(OutputCarFile,saved_pos_file,SEEK_SET);
-		rewind(input_text_file);
+		fseek(input_text_file,0,SEEK_SET);	
 		store(input_text_file);	
 	}
 	fclose(input_text_file);
+	
+	//サイズやCRCはここで確定するのでヘッダ情報として書き込む
 	fseek(OutputCarFile,saved_pos_header,SEEK_SET);
 	WriteFileHeader();
 	fseek(OutputCarFile,0,SEEK_END);
 
 }
 
+//入力ファイルをそのまま出力アーカイブに書き込む
+//bufferに読み込んでから，読み込んだ分だけ書き込む
 int store(FILE *input_text_file){
 	char buffer[BUFFER_SIZE];
 	Header.original_crc=CRC_MASK;
@@ -237,14 +251,9 @@ int store(FILE *input_text_file){
 uint32_t unstore(FILE *destination){
 	uint32_t crc=CRC_MASK;
 	unsigned char buffer[BUFFER_SIZE];
-	int count;	
+	unsigned int count;	
 	while(Header.original_size!=0){
-		if(Header.original_size>BUFFER_SIZE){
-			count=BUFFER_SIZE;	
-		}else{
-			count=(int)Header.original_size;	
-		}
-		
+		count=Header.original_size>BUFFER_SIZE?BUFFER_SIZE:(int)Header.original_size;	
 		if(fread(buffer,1,count,InputCarFile)!=count){
 			fprintf(stderr,"CARファイルの読み込みに失敗しました\n");
 			exit(1);	
@@ -259,11 +268,12 @@ uint32_t unstore(FILE *destination){
 	return crc^CRC_MASK;
 }
 
+//ファイル名の長さが0のヘッダを終端としている
 void WriteEndOfCarHeader(void){
 	fputc(0,OutputCarFile);
 }
 
-
+//現在処理中のファイルのヘッダ情報を出力アーカイブに書き込む
 void WriteFileHeader(void){
 	int i=0;	
 	for(;;){
@@ -305,6 +315,7 @@ uint32_t unpack(int num_bytes,unsigned char *buffer){
 	return result;
 }
 
+//アーカイブのヘッダを順番に読み込み，指定された処理をする
 int ProcessAllFiles(int command,int count){
 	FILE *destination;
 	if(command=='p'){
@@ -314,7 +325,7 @@ int ProcessAllFiles(int command,int count){
 	}
 	int matched;	
 	FILE *input_text_file;	
-	while(InputCarFile!=NULL && ReadFileHeader()!=0){
+	while(InputCarFile!=NULL && ReadFileHeader()!=END_OF_CAR_HEADER){
 		matched=SearchFileList(Header.file_name);
 		switch(command){
 
@@ -329,6 +340,8 @@ int ProcessAllFiles(int command,int count){
 				}
 				break;
 
+			//ファイル名がマッチしていれば，すでに追加されている
+			//出力アーカイブに含めないようにスキップする
 			case 'a':
 				if(matched){
 					SkipOverFile();				
@@ -370,16 +383,22 @@ int ProcessAllFiles(int command,int count){
 	return count;
 }
 
+//現在処理中のファイルを書き込まずにスキップする
+//圧縮後のサイズだけカーソルを進める
+//この関数を呼出したときには，ファイルポインタは現在のヘッダに対応するデータの先頭を指していると仮定している
 void SkipOverFile(void){
 	fseek(InputCarFile,Header.compressed_size,SEEK_CUR);
 }
 
+//入力CARファイルから出力CARファイルにコピーする
+//先にReadFileHeader()で読み込んでいたヘッダ情報を書き込む
+//データはbufferに読み込んでから出力CARファイルに書き込む
 void CopyFile(void){
 	char buffer[BUFFER_SIZE];
 	unsigned int count=0;
 	WriteFileHeader();	
 	while(Header.compressed_size!=0){
-		count=Header.compressed_size<BUFFER_SIZE?(unsigned int)Header.compressed_size:BUFFER_SIZE;
+		count=Header.compressed_size<BUFFER_SIZE?(int)Header.compressed_size:BUFFER_SIZE;
 		if(fread(buffer,1,count,InputCarFile)!=count){
 			fprintf(stderr,"%sの読み込みに失敗しました\n",Header.file_name);	
 			exit(1);
@@ -392,6 +411,7 @@ void CopyFile(void){
 	}
 }
 
+//現在読み込んでいるヘッダ情報に一致するファイルを引数のファイルリストから調べる
 int SearchFileList(char *file_name){
 	for(int i=0;FileList[i]!=NULL;i++){
 		if(WildCardMatch(file_name,FileList[i])){
@@ -422,22 +442,24 @@ int WildCardMatch(char *string,char *wild_string){
 				}else if(*string=='\0'){
 					return 0;	
 				}else{
-					//wild_stringが終端の場合はstringだけ進める	
+					//wild_stringのみが終端の場合はstringだけ進める	
 					string++;	
 				}
 			}
+		
+		//?の次の文字を見る	
 		}else if(*wild_string=='?'){
-			//次の文字を指す	
 			wild_string++;
 			//空文字は任意の一文字には含まれない	
 			if(*string++=='\0'){
 				return 0;	
 			}
+		
+		//ワイルドカード無しの単純な比較
 		}else{
 			if(*string!=*wild_string){
 				return 0;	
-			}
-			if(*string=='\0'){
+			}else if(*string=='\0'){
 				return 1;	
 			}
 			string++;
@@ -463,11 +485,11 @@ int ReadFileHeader(void){
 	}
 	//ファイル名の長さが0の場合はCARの末尾
 	if(i==0){
-		return 0;	
+		return END_OF_CAR_HEADER;	
 	}
 	uint32_t header_crc=CalculateCRC32(i+1,CRC_MASK,Header.file_name);
-	unsigned char header_data[BUFFER_SIZE];	
-	fread(header_data,1,BUFFER_SIZE,InputCarFile);
+	unsigned char header_data[HEADER_BLOCK_SIZE];	
+	fread(header_data,1,HEADER_BLOCK_SIZE,InputCarFile);
 	int num_byte=1;	
 	Header.compression_method=(char)unpack(num_byte,header_data+0);
 	num_byte=4;
@@ -484,14 +506,68 @@ int ReadFileHeader(void){
 	return 1;
 }
 
+//入力CARファイルからファイルを取り出し，destinationへ書き出す
 void extract(FILE *destination){
+	fprintf(stderr,"%s\n\n",Header.file_name);
+	FILE *output_text_file;
+
+	//出力先にNULLが指定されていれば，ヘッダ中の指定されたファイルを展開し取り出す	
+	if(destination==NULL){
+		if((output_text_file=fopen(Header.file_name,"wb"))==NULL){
+			fprintf(stderr,"%sを開けませんでした\n",Header.file_name);
+			SkipOverFile();
+			return ;	
+		}
+
+	}else{
+		output_text_file=destination;	
+	}
+	uint32_t crc;	
+	int error=0;
+	switch(Header.compression_method){
+		
+		//圧縮していない生のデータの場合はそのまま取り出す	
+		case 1:
+			crc=unstore(output_text_file);
+			break;	
+	
+		//圧縮データの場合は展開して取り出す	
+		case 2:
+			crc=LZSSExpand(output_text_file);
+			break;	
+		
+		default:
+			fprintf(stderr,"不明なメソッド: %c\n",Header.compression_method);
+			SkipOverFile();
+			error=1;
+			crc=Header.original_crc;
+			break;
+	}
+	
+	fprintf(stderr,"\n\n");
+
+	if(crc!=Header.original_crc){
+		fprintf(stderr,"CRCエラー\n");
+		error=1;
+	}
+	if(destination==NULL){
+		fclose(output_text_file);
+		if(error){
+			remove(Header.file_name);	
+		}
+	}
+
+
+	if(!error){
+		fprintf(stderr,"OK\n");	
+	}
 }
 
 
 //-- 以下，圧縮処理関係 -- 
 static char data_buffer[DATA_BUFFER_SIZE];
 static int flag_bit_mask;
-static int buffer_offset;
+static unsigned int buffer_offset;
 
 static unsigned char window[WINDOW_SIZE]; 
 static Tree tree[WINDOW_SIZE+1];
@@ -502,6 +578,8 @@ void InitOutputBuffer(void){
 	buffer_offset=1;
 }
 
+//バッファを出力アーカイブに書き込む
+//元のデータよりも圧縮後のほうが大きくなった場合は，圧縮を中止するため0を返す
 int FlushOutputBuffer(void){
 	if(buffer_offset==1){
 		return 1;	
@@ -515,8 +593,12 @@ int FlushOutputBuffer(void){
 		exit(1);	
 	}
 	InitOutputBuffer();
+	return 1;
 }
 
+//単一の文字を出力バッファに加える
+//フラグビットをシフトし，8ビット全て使われた場合バッファを書き出す
+//元のデータよりも圧縮後の方が大きくなった場合は0を返す
 int OutputChar(int data){
 	data_buffer[buffer_offset++]=(char)data;
 	data_buffer[0]|=flag_bit_mask;
@@ -528,11 +610,13 @@ int OutputChar(int data){
 	}
 }
 
+//インデックスと長さの組をバッファに出力する
+//フラグビットをシフトしていき8ビット全て使われた場合バッファを書き出す
 int OutputPair(int position,int length){
-	//1バイトの先頭4ビットはlength，残りの4ビットをpositionの語頭4ビットを格納	
+	//1バイトの先頭4ビットはlength，残りの4ビットはpositionの語頭4ビットを格納	
 	data_buffer[buffer_offset]=(char)(length<<LENGTH_BIT);
 	data_buffer[buffer_offset++]|=(position>>(INDEX_BIT-LENGTH_BIT));
-	data_buffer[buffer_offset++]|=(char)(position & 0xff);
+	data_buffer[buffer_offset++]=(char)(position & 0xff);
 	flag_bit_mask<<=1;
 	if(flag_bit_mask==0x100){
 		return FlushOutputBuffer();	
@@ -564,6 +648,7 @@ int LZSSCompress(FILE *input_text_file){
 	int current_position=1;
 	int c;
 	int i=0;
+	//窓に先読みしておく	
 	for(;i<LOOK_AHEAD_SIZE;i++){
 		if((c=getc(input_text_file))==EOF){
 			break;
@@ -582,11 +667,15 @@ int LZSSCompress(FILE *input_text_file){
 		int replace_count;
 		if(match_length<=BREAK_EVEN){
 			replace_count=1;
+			
+			//圧縮後の方が元より大きくなった場合は0を返す	
 			if(!OutputChar(window[current_position])){
 				return 0;	
 			}
 		}else{
 			replace_count=match_length;
+			
+			//圧縮後の方が元より大きくなった場合は0を返す	
 			if(!OutputPair(match_position,match_length-(BREAK_EVEN+1))){
 				return 0;	
 			}
@@ -596,6 +685,7 @@ int LZSSCompress(FILE *input_text_file){
 			if((c=getc(input_text_file))==EOF){
 				look_ahead_size--;
 			}else{
+				Header.original_crc=UpdateCharacterCRC32(Header.original_crc,c);	
 				window[MOD_WINDOW(current_position+LOOK_AHEAD_SIZE)]=(unsigned char)c;
 			}
 			current_position=MOD_WINDOW(current_position+1);
@@ -721,6 +811,7 @@ uint32_t LZSSExpand(FILE *output){
 			for(int i=0;i<=match_length;i++){
 				c=window[MOD_WINDOW(match_position+i)];
 				putc(c,output);
+				crc=UpdateCharacterCRC32(crc,c);
 				window[current_position]=(unsigned char)c;
 				current_position=MOD_WINDOW(current_position+1);
 			}
@@ -729,3 +820,4 @@ uint32_t LZSSExpand(FILE *output){
 	}
 	return crc^CRC_MASK;
 }
+
