@@ -16,6 +16,10 @@ int main(int argc,char *argv[]){
 	if(command=='a'){
 		count=AddFileList();	
 	}
+	
+	if(command=='l'){
+		PrintTitle();	
+	}
 	count=ProcessAllFiles(command,count);
 	if(OutputCarFile!=NULL && count!=0){
 		WriteEndOfCarHeader();
@@ -26,11 +30,7 @@ int main(int argc,char *argv[]){
 		remove(CarFileName);	
 		rename(TmpFileName,CarFileName);
 	}
-	if(command!='p'){
-		printf("\n%d個のファイル\n",count);	
-	}else{
-		fprintf(stderr,"\n%d個のファイル\n",count);	
-	}
+	fprintf(stderr,"\n%d個のファイル\n",count);	
 
 	return 0;
 }
