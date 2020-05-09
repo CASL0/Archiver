@@ -9,13 +9,14 @@
 
 void usage(void){
 	fprintf(stderr,"CAR -- Compressed ARchiver\n\n"); 
-	fprintf(stderr,"usage: car command car-file [file ...]\n\n");
+	fprintf(stderr,"usage: car [command] [car-file] [file ...]\n\n");
 	fprintf(stderr,"commands: \n");
-	fprintf(stderr,"  a：ファイルをアーカイブに追加する\n");
-	fprintf(stderr,"  x：ファイルをアーカイブから取り出す\n");
-	fprintf(stderr,"  r：アーカイブのファイルを置換する\n");
-	fprintf(stderr,"  d：アーカイブのファイルを削除する\n");
-	fprintf(stderr,"  p：アーカイブのファイルを表示する\n");
+	fprintf(stderr,"  a：アーカイブにファイルを追加\n");
+	fprintf(stderr,"  x：アーカイブからファイルを取り出す\n");
+	fprintf(stderr,"  r：アーカイブ内のファイルを置換\n");
+	fprintf(stderr,"  d：アーカイブ内のファイルを削除\n");
+	fprintf(stderr,"  p：アーカイブ内のファイルを閲覧\n");
+	fprintf(stderr,"  l：アーカイブの一覧表示\n");
 	fprintf(stderr,"\n");
 	exit(1);
 }
@@ -36,9 +37,7 @@ uint32_t CalculateCRC32(uint32_t count, uint32_t crc, void *buffer){
 	unsigned char *p=(unsigned char*)buffer;
 	uint32_t tmp1,tmp2;
 	while(count--!=0){
-		tmp1=(crc>>8) & 0x00ffffff;	
-		tmp2=C32Table[((int)crc^*p++) & 0xff];
-		crc=tmp1^tmp2;
+		crc=UpdateCharacterCRC32(crc,*p++);	
 	}
 	return crc;
 }
@@ -60,26 +59,30 @@ int ParseArguments(int argc,char *argv[]){
 	int command;
 	switch(command=tolower(argv[1][0])){
 		case 'x':
-			fprintf(stderr,"ファイルの取り出し\n");	
+			fprintf(stderr,"アーカイブからファイルを取り出す\n");	
 			break;
 		case 'r':
-			fprintf(stderr,"ファイルの置換\n");	
+			fprintf(stderr,"アーカイブ内のファイルを置換\n");	
 			break;
 		case 'p':
-			fprintf(stderr,"ファイルの表示\n");	
+			fprintf(stderr,"アーカイブ内のファイルを閲覧\n");	
 			break;
 		case 'd':
 			if(argc<=3){
 				usage();	
 			}
-			fprintf(stderr,"ファイルをアーカイブから削除\n");
+			fprintf(stderr,"アーカイブからファイルを削除\n");
 			break;
 		case 'a':
 			if(argc<=3){
 				usage();	
 			}
-			fprintf(stderr,"ファイルをアーカイブに追加\n");
+			fprintf(stderr,"アーカイブにファイルを追加\n");
 			break;
+		case 'l':
+			fprintf(stderr,"アーカイブの一覧表示\n");
+			break;	
+
 		default:
 			usage();
 	}
@@ -111,7 +114,7 @@ void OpenArchiveFiles(char *name, int command){
 		}
 	}
 	
-	//追加コマンドの場合は新しくアーカイブファイルを作成するのでNULLが許容される	
+	//追加コマンドの場合は新しくアーカイブファイルを作成することもあるのでNULLが許容される	
 	if(InputCarFile==NULL && command != 'a'){
 		fprintf(stderr,"アーカイブ%sを開けませんでした\n",CarFileName);	
 		exit(1);
@@ -143,7 +146,7 @@ void BuildFileList(int argc, char *argv[], int command){
 		FileList[count++]="*";	
 	}else{
 		for(int i=0;i<argc;i++){
-			FileList[count]=(char*)malloc(strlen(argv[i])+2);	
+			FileList[count]=(char*)malloc(strlen(argv[i])+1);	
 			if(FileList[count]==NULL){
 				fprintf(stderr,"メモリの確保に失敗しました\n");
 				exit(1);	
@@ -161,6 +164,7 @@ void BuildFileList(int argc, char *argv[], int command){
 //リスト内のファイルを出力アーカイブファイルに追加する
 //パス情報はすべて取り除く
 //ファイルが重複していた場合スキップする
+//追加したファイル数を返す
 int AddFileList(void){
 	FILE *input_text_file;	
 	int i=0;
@@ -208,19 +212,19 @@ int AddFileList(void){
 void insert(FILE *input_text_file,char *operation){
 	fprintf(stderr,"%s %s\n",operation,Header.file_name);
 	
-	//圧縮後が元のサイズよりも大きくなった場合，やり直す
+	//圧縮後が元のサイズよりも大きくなった場合，書き込みをやり直す
 	//やり直す際に戻ってこれるようにカーソルを保存
 	long saved_pos_header=ftell(OutputCarFile);
-	Header.compression_method=2;	
+	Header.compression_method=LZSS;	
 	WriteFileHeader();
 	long saved_pos_file=ftell(OutputCarFile);
 	fseek(input_text_file,0,SEEK_END);
 	Header.original_size=ftell(input_text_file);
 	fseek(input_text_file,0,SEEK_SET);
 	
-	//圧縮後にサイズが拡大した場合は，生のデータを書き込む
+	//圧縮後にサイズが拡大した場合は，元のデータを書き込む
 	if(!LZSSCompress(input_text_file)){
-		Header.compression_method=1;
+		Header.compression_method=ORIGIN;
 		fseek(OutputCarFile,saved_pos_file,SEEK_SET);
 		fseek(input_text_file,0,SEEK_SET);	
 		store(input_text_file);	
@@ -234,7 +238,7 @@ void insert(FILE *input_text_file,char *operation){
 
 }
 
-//入力ファイルをそのまま出力アーカイブに書き込む
+//入力ファイルを圧縮せずにそのまま出力アーカイブに書き込む
 //bufferに読み込んでから，読み込んだ分だけ書き込む
 int store(FILE *input_text_file){
 	char buffer[BUFFER_SIZE];
@@ -249,6 +253,7 @@ int store(FILE *input_text_file){
 	return 1;
 }
 
+//入力ファイルを展開せずにそのまま出力ファイルに書き込む
 uint32_t unstore(FILE *destination){
 	uint32_t crc=CRC_MASK;
 	unsigned char buffer[BUFFER_SIZE];
@@ -261,7 +266,7 @@ uint32_t unstore(FILE *destination){
 		}
 		if(fwrite(buffer,1,count,destination)!=count){
 			fprintf(stderr,"書き込みに失敗しました\n");
-			return ~Header.original_crc;	
+			exit(1);	
 		}
 		crc=CalculateCRC32(count,crc,buffer);
 		Header.original_size-=count;	
@@ -297,6 +302,7 @@ void WriteFileHeader(void){
 	fwrite(header_data,1,HEADER_BLOCK_SIZE,OutputCarFile);	
 }
 
+//書き込むデータをバッファに格納しておき，バッファがいっぱいになったらファイルに書き込む
 void pack(int num_bytes,uint32_t number, unsigned char *buffer){
 	while(num_bytes-->0){
 		//8ビットずつバッファに出力
@@ -306,7 +312,8 @@ void pack(int num_bytes,uint32_t number, unsigned char *buffer){
 	}
 }
 
-uint32_t unpack(int num_bytes,unsigned char *buffer){
+//バッファのデータをint型に変換する
+unsigned int unpack(int num_bytes,unsigned char *buffer){
 	uint32_t result=0;
 	int shift_count=0;
 	while(num_bytes-->0){
@@ -379,6 +386,15 @@ int ProcessAllFiles(int command,int count){
 					CopyFile();	
 				}
 				break;
+
+			//アーカイブを一覧表示する
+			case 'l':
+				if(matched){
+					ListCarFile();
+					count++;	
+				}
+				SkipOverFile();
+				break;	
 		}
 	}
 	return count;
@@ -471,6 +487,8 @@ int WildCardMatch(char *string,char *wild_string){
 
 }
 
+//ヘッダの読み込み
+//ファイル名の長さが0の場合はCARの末尾
 int ReadFileHeader(void){
 	int i=0;
 	for(;;){
@@ -528,12 +546,12 @@ void extract(FILE *destination){
 	switch(Header.compression_method){
 		
 		//圧縮していない生のデータの場合はそのまま取り出す	
-		case 1:
+		case ORIGIN:
 			crc=unstore(output_text_file);
 			break;	
 	
 		//圧縮データの場合は展開して取り出す	
-		case 2:
+		case LZSS:
 			crc=LZSSExpand(output_text_file);
 			break;	
 		
@@ -564,3 +582,24 @@ void extract(FILE *destination){
 	}
 }
 
+void PrintTitle(void){
+	printf("\n");
+	printf(
+	"   file name         original size    compressed size   ratio   method \n");
+	printf(
+	"---------------     ---------------  -----------------  -----  --------\n");
+
+}
+
+void ListCarFile(void){
+	static char *methods[]={"original","LZSS"};
+	
+	printf("%-15s    %10u byte    %10u byte   %4d%%   %s\n",Header.file_name,Header.original_size,Header.compressed_size,CompressionRatio(Header.compressed_size,Header.original_size),methods[(int)Header.compression_method-1]);
+}
+
+int CompressionRatio(ull compressed,ull original){
+	if(original==0){
+		return 0;	
+	}
+	return (int)((1-(double)compressed/original)*100);
+}

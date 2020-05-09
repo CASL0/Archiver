@@ -13,10 +13,15 @@
 #define END_OF_CAR_HEADER 0
 #define CRC_TABLE_SIZE 256
 
-
 #ifndef FILENAME_MAX
 #define FILENAME_MAX 128
 #endif //FILENAME_MAX
+
+enum METHOD{
+	ORIGIN=1,
+	LZSS=2
+};
+
 
 struct HEADER{
 	char file_name[FILENAME_MAX];
@@ -66,6 +71,7 @@ extern void extract(FILE *destination);
 extern void WriteEndOfCarHeader(void);
 extern int store(FILE *input_text_file);
 extern uint32_t unstore(FILE *destination);
-
-
+extern void PrintTitle(void);
+extern void ListCarFile(void);
+extern int CompressionRatio(unsigned long long compressed,unsigned long long original);
 #endif //CAR_H
