@@ -77,7 +77,9 @@ int InputBit(void){
 }
 
 
-
+//LZSSにより入力ファイルを圧縮する
+//圧縮が成功した場合は1を返す
+//元のデータよりも圧縮後の方が大きくなった場合は0を返す
 int LZSSCompress(FILE *input_text_file){
 	Header.compressed_size=0;
 	Header.original_crc=CRC_MASK;
@@ -118,6 +120,9 @@ int LZSSCompress(FILE *input_text_file){
 				return 0;	
 			}
 		}
+		
+		//窓をスライドさせる
+		//窓の終端の文字列を二分探索木から削除する
 		for(i=0;i<replace_count;i++){
 			DeleteString(MOD_WINDOW(current_position+LOOK_AHEAD_SIZE));
 			if((c=getc(input_text_file))==EOF){
@@ -127,6 +132,8 @@ int LZSSCompress(FILE *input_text_file){
 				window[MOD_WINDOW(current_position+LOOK_AHEAD_SIZE)]=(unsigned char)c;
 			}
 			current_position=MOD_WINDOW(current_position+1);
+			
+			//最長一致文字列の長さとインデックスを受け取る	
 			if(look_ahead_size){
 				match_length=AddString(current_position,&match_position);
 			}
@@ -136,6 +143,8 @@ int LZSSCompress(FILE *input_text_file){
 	return FlushOutputBuffer();
 }
 
+//二分探索木に文字列を追加する
+//現在の文字列と最長一致する文字列を探して，その長さを返す
 int AddString(int new_node,int *match_position){
 	if(new_node==END_OF_STREAM){
 		return 0;
@@ -178,6 +187,7 @@ void InitTree(int root){
 	tree[root].larger_child=UNUSED;
 }
 
+//二分探索木からノードを削除する
 void DeleteString(int node){
 	if(tree[node].parent==UNUSED){
 		return ;
@@ -223,6 +233,8 @@ int LeftMost(int node){
 	return node;
 }
 
+//LZSSによりファイルを展開する
+//CRCチェックサムの値を返す
 uint32_t LZSSExpand(FILE *output){
 	uint32_t crc=CRC_MASK;
 	ull output_count=0;
