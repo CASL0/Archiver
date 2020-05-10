@@ -15,6 +15,7 @@ typedef unsigned long long ull;
 #define END_OF_STREAM 0
 #define UNUSED 0
 #define MOD_WINDOW(x) ((x)&((WINDOW_SIZE)-1))
+#define DATA_BUFFER_SIZE 17 
 
 struct Tree{
 	int parent;
