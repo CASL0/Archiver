@@ -5,7 +5,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdint.h>
-
+#include <time.h>
 
 void usage(void){
 	fprintf(stderr,"CAR -- Compressed ARchiver\n\n"); 
@@ -35,7 +35,6 @@ void BuildCRCTable(void){
 //引数crcをseedとして計算する
 uint32_t CalculateCRC32(uint32_t count, uint32_t crc, void *buffer){
 	unsigned char *p=(unsigned char*)buffer;
-	uint32_t tmp1,tmp2;
 	while(count--!=0){
 		crc=UpdateCharacterCRC32(crc,*p++);	
 	}
@@ -208,6 +207,52 @@ int AddFileList(void){
 	return i;
 }
 
+//MS-DOS date formatに準拠して，最終更新日時を4バイトで保存
+uint32_t TimeStamp(void){
+	time_t now=time(NULL);
+	struct tm *pnow=localtime(&now);
+	int year=(pnow->tm_year+1900)-2000;
+	int month=pnow->tm_mon+1;
+	int day=pnow->tm_mday;
+	int hour=pnow->tm_hour;
+	int min=pnow->tm_min;
+	int sec=pnow->tm_sec;
+
+	uint32_t last_mod_time=0;
+	last_mod_time=year;
+	last_mod_time<<=TIMESTAMP_MON_BIT;
+	last_mod_time|=month;
+	last_mod_time<<=TIMESTAMP_DAY_BIT;
+	last_mod_time|=day;
+	last_mod_time<<=TIMESTAMP_HOUR_BIT;
+	last_mod_time|=hour;
+	last_mod_time<<=TIMESTAMP_MIN_BIT;
+	last_mod_time|=min;
+	last_mod_time<<=TIMESTAMP_SEC_BIT;
+	last_mod_time|=sec;
+	
+	return last_mod_time;
+}
+
+//MS-DOS date formatから文字列への変換
+//形式はyyyy-mm-dd hh:mm:ss
+char *TransformMSDOSdate2str(uint32_t last_mod_time){
+	char *date=(char*)malloc(sizeof(char)*DATE_LENGTH);
+	int sec=last_mod_time & ((1<<TIMESTAMP_SEC_BIT)-1);	
+	last_mod_time>>=TIMESTAMP_SEC_BIT;
+	int min=last_mod_time & ((1<<TIMESTAMP_MIN_BIT)-1);
+	last_mod_time>>=TIMESTAMP_MIN_BIT;
+	int hour=last_mod_time & ((1<<TIMESTAMP_HOUR_BIT)-1);
+	last_mod_time>>=TIMESTAMP_HOUR_BIT;
+	int day=last_mod_time & ((1<<TIMESTAMP_DAY_BIT)-1);
+	last_mod_time>>=TIMESTAMP_DAY_BIT;
+	int month=last_mod_time & ((1<<TIMESTAMP_MON_BIT)-1);
+	last_mod_time>>=TIMESTAMP_MON_BIT;
+	int year=last_mod_time;
+	year+=2000;
+	sprintf(date,"%d-%d-%d %d:%d:%d",year,month,day,hour,min,sec);
+	return date;
+}
 //入力ファイルに対して圧縮処理を施したデータを出力アーカイブに書き込む
 void insert(FILE *input_text_file,char *operation){
 	fprintf(stderr,"%s %s\n",operation,Header.file_name);
@@ -222,9 +267,11 @@ void insert(FILE *input_text_file,char *operation){
 	Header.original_size=ftell(input_text_file);
 	fseek(input_text_file,0,SEEK_SET);
 	
+	Header.last_mod_time=TimeStamp();
+
 	//圧縮後にサイズが拡大した場合は，元のデータを書き込む
 	if(!LZSSCompress(input_text_file)){
-		Header.compression_method=ORIGIN;
+		Header.compression_method=STORED;
 		fseek(OutputCarFile,saved_pos_file,SEEK_SET);
 		fseek(input_text_file,0,SEEK_SET);	
 		store(input_text_file);	
@@ -290,15 +337,22 @@ void WriteFileHeader(void){
 	}
 	unsigned char header_data[HEADER_BLOCK_SIZE];
 	Header.header_crc=CalculateCRC32(i,CRC_MASK,Header.file_name);
+	int header_offset=0;
 	int num_byte=1;
-	pack(num_byte,(uint32_t)Header.compression_method,header_data+0);
+	pack(num_byte,(uint32_t)Header.compression_method,header_data+header_offset);
+	header_offset+=num_byte;
 	num_byte=4;
-	pack(num_byte,Header.original_size,header_data+1);
-	pack(num_byte,Header.compressed_size,header_data+5);
-	pack(num_byte,Header.original_crc,header_data+9);
-	Header.header_crc=CalculateCRC32(13,Header.header_crc,header_data);
+	pack(num_byte,Header.original_size,header_data+header_offset);
+	header_offset+=num_byte;
+	pack(num_byte,Header.compressed_size,header_data+header_offset);
+	header_offset+=num_byte;
+	pack(num_byte,Header.last_mod_time,header_data+header_offset);
+	header_offset+=num_byte;
+	pack(num_byte,Header.original_crc,header_data+header_offset);
+	header_offset+=num_byte;
+	Header.header_crc=CalculateCRC32(17,Header.header_crc,header_data);
 	Header.header_crc^=CRC_MASK;
-	pack(num_byte,Header.header_crc,header_data+13);
+	pack(num_byte,Header.header_crc,header_data+header_offset);
 	fwrite(header_data,1,HEADER_BLOCK_SIZE,OutputCarFile);	
 }
 
@@ -509,14 +563,21 @@ int ReadFileHeader(void){
 	uint32_t header_crc=CalculateCRC32(i+1,CRC_MASK,Header.file_name);
 	unsigned char header_data[HEADER_BLOCK_SIZE];	
 	fread(header_data,1,HEADER_BLOCK_SIZE,InputCarFile);
-	int num_byte=1;	
-	Header.compression_method=(char)unpack(num_byte,header_data+0);
+	int num_byte=1;
+	int header_offset=0;	
+	Header.compression_method=(char)unpack(num_byte,header_data+header_offset);
+	header_offset+=num_byte;
 	num_byte=4;
-	Header.original_size=unpack(num_byte,header_data+1);
-	Header.compressed_size=unpack(num_byte,header_data+5);
-	Header.original_crc=unpack(num_byte,header_data+9);
-	Header.header_crc=unpack(num_byte,header_data+13);
-	header_crc=CalculateCRC32(13,header_crc,header_data);
+	Header.original_size=unpack(num_byte,header_data+header_offset);
+	header_offset+=num_byte;
+	Header.compressed_size=unpack(num_byte,header_data+header_offset);
+	header_offset+=num_byte;
+	Header.last_mod_time=unpack(num_byte,header_data+header_offset);
+	header_offset+=num_byte;
+	Header.original_crc=unpack(num_byte,header_data+header_offset);
+	header_offset+=num_byte;
+	Header.header_crc=unpack(num_byte,header_data+header_offset);
+	header_crc=CalculateCRC32(17,header_crc,header_data);
 	header_crc^=CRC_MASK;
 	if(Header.header_crc!=header_crc){
 		fprintf(stderr,"ヘッダー%s：チェックサムエラー",Header.file_name);	
@@ -546,7 +607,7 @@ void extract(FILE *destination){
 	switch(Header.compression_method){
 		
 		//圧縮していない生のデータの場合はそのまま取り出す	
-		case ORIGIN:
+		case STORED:
 			crc=unstore(output_text_file);
 			break;	
 	
@@ -585,16 +646,16 @@ void extract(FILE *destination){
 void PrintTitle(void){
 	printf("\n");
 	printf(
-	"   file name         original size    compressed size   ratio   method \n");
+	"  名  前          最終更新         元のサイズ    圧縮後のサイズ   ratio      CRC      method \n");
 	printf(
-	"---------------     ---------------  -----------------  -----  --------\n");
+	"----------  --------------------  ------------  ----------------  -----  ----------  --------\n");
 
 }
 
 void ListCarFile(void){
-	static char *methods[]={"original","LZSS"};
+	static char *methods[]={"stored","LZSS"};
 	
-	printf("%-15s    %10u byte    %10u byte   %4d%%   %s\n",Header.file_name,Header.original_size,Header.compressed_size,CompressionRatio(Header.compressed_size,Header.original_size),methods[(int)Header.compression_method-1]);
+	printf("%-13s%s%9u bytes   %9u bytes %4d%%    %08x    %s\n",Header.file_name,TransformMSDOSdate2str(Header.last_mod_time),Header.original_size,Header.compressed_size,CompressionRatio(Header.compressed_size,Header.original_size),Header.original_crc,methods[(int)Header.compression_method-1]);
 }
 
 int CompressionRatio(ull compressed,ull original){
