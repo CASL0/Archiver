@@ -7,18 +7,24 @@
 #define CRC_MASK 0xffffffff
 #define CRC32_POLYNOMIAL 0xedb88320
 #define FILE_LIST_MAX 100
-#define HEADER_BLOCK_SIZE 17
+#define HEADER_BLOCK_SIZE 21
 #define BUFFER_SIZE 256
-#define DATA_BUFFER_SIZE 17 
 #define END_OF_CAR_HEADER 0
 #define CRC_TABLE_SIZE 256
+#define TIMESTAMP_MON_BIT 4
+#define TIMESTAMP_DAY_BIT 5
+#define TIMESTAMP_HOUR_BIT 5
+#define TIMESTAMP_MIN_BIT 6
+#define TIMESTAMP_SEC_BIT 6
+#define DATE_LENGTH 20
+
 
 #ifndef FILENAME_MAX
 #define FILENAME_MAX 128
 #endif //FILENAME_MAX
 
 enum METHOD{
-	ORIGIN=1,
+	STORED=1,
 	LZSS=2
 };
 
@@ -28,6 +34,7 @@ struct HEADER{
 	char compression_method;
 	uint32_t original_size;
 	uint32_t compressed_size;
+	uint32_t last_mod_time;
 	uint32_t original_crc;
 	uint32_t header_crc;	
 };
@@ -74,4 +81,6 @@ extern uint32_t unstore(FILE *destination);
 extern void PrintTitle(void);
 extern void ListCarFile(void);
 extern int CompressionRatio(unsigned long long compressed,unsigned long long original);
+extern uint32_t TimeStamp(void);
+extern char *TransformMSDOSdate2str(uint32_t last_mod_time);
 #endif //CAR_H
