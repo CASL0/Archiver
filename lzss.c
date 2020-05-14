@@ -3,7 +3,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+//書き込む前にバッファに格納し，一杯になったら書き出す
 static char data_buffer[DATA_BUFFER_SIZE];
+//バッファの先頭1バイトはフレーズのフラグとして使う
 static int flag_bit_mask;
 static unsigned int buffer_offset;
 
