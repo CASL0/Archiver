@@ -250,7 +250,7 @@ char *TransformMSDOSdate2str(uint32_t last_mod_time){
 	last_mod_time>>=TIMESTAMP_MON_BIT;
 	int year=last_mod_time;
 	year+=2000;
-	sprintf(date,"%d-%d-%d %d:%d:%d",year,month,day,hour,min,sec);
+	sprintf(date,"%4d-%02d-%02d %02d:%02d:%02d",year,month,day,hour,min,sec);
 	return date;
 }
 //入力ファイルに対して圧縮処理を施したデータを出力アーカイブに書き込む
@@ -646,16 +646,16 @@ void extract(FILE *destination){
 void PrintTitle(void){
 	printf("\n");
 	printf(
-	"  名  前          最終更新         元のサイズ    圧縮後のサイズ   ratio      CRC      method \n");
+	"     名  前             最終更新          元のサイズ      圧縮後のサイズ   ratio    CRC      method \n");
 	printf(
-	"----------  --------------------  ------------  ----------------  -----  ----------  --------\n");
+	"----------------  -------------------  ----------------  ----------------  -----  --------  --------\n");
 
 }
 
 void ListCarFile(void){
 	static char *methods[]={"stored","LZSS"};
 	
-	printf("%-13s%s%9u bytes   %9u bytes %4d%%    %08x    %s\n",Header.file_name,TransformMSDOSdate2str(Header.last_mod_time),Header.original_size,Header.compressed_size,CompressionRatio(Header.compressed_size,Header.original_size),Header.original_crc,methods[(int)Header.compression_method-1]);
+	printf("%-15s   %19s  %10u bytes  %10u bytes  %4d%%  %08x  %s\n",Header.file_name,TransformMSDOSdate2str(Header.last_mod_time),Header.original_size,Header.compressed_size,CompressionRatio(Header.compressed_size,Header.original_size),Header.original_crc,methods[(int)Header.compression_method-1]);
 }
 
 int CompressionRatio(ull compressed,ull original){
