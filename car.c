@@ -1,3 +1,4 @@
+#include "third-party/lz4.h"
 #include "car.h"
 #include "lzss.h"
 #include <stdio.h>
@@ -257,10 +258,13 @@ char *TransformMSDOSdate2str(uint32_t last_mod_time){
 void insert(FILE *input_text_file,char *operation){
 	fprintf(stderr,"%s %s\n",operation,Header.file_name);
 	
+	int method_offset=2;
+	int selected_method=DEFAULT_METHOD-method_offset;	
+	Header.compression_method=DEFAULT_METHOD;
+
 	//圧縮後が元のサイズよりも大きくなった場合，書き込みをやり直す
 	//やり直す際に戻ってこれるようにカーソルを保存
 	long saved_pos_header=ftell(OutputCarFile);
-	Header.compression_method=LZSS;	
 	WriteFileHeader();
 	long saved_pos_file=ftell(OutputCarFile);
 	fseek(input_text_file,0,SEEK_END);
@@ -269,8 +273,10 @@ void insert(FILE *input_text_file,char *operation){
 	
 	Header.last_mod_time=TimeStamp();
 
+	int (*compress[])()={LZSSCompress,lz4CompressRequest};
+
 	//圧縮後にサイズが拡大した場合は，元のデータを書き込む
-	if(!LZSSCompress(input_text_file)){
+	if(!(*compress[selected_method])(input_text_file)){
 		Header.compression_method=STORED;
 		fseek(OutputCarFile,saved_pos_file,SEEK_SET);
 		fseek(input_text_file,0,SEEK_SET);	
@@ -615,7 +621,10 @@ void extract(FILE *destination){
 		case LZSS:
 			crc=LZSSExpand(output_text_file);
 			break;	
-		
+	
+		case LZ4:
+			crc=lz4ExpandRequest(output_text_file);
+			break;	
 		default:
 			fprintf(stderr,"不明なメソッド: %c\n",Header.compression_method);
 			SkipOverFile();
@@ -653,9 +662,9 @@ void PrintTitle(void){
 }
 
 void ListCarFile(void){
-	static char *methods[]={"stored","LZSS"};
+	static char *methods[]={"stored","LZSS","LZ4"};
 	
-	printf("%-15s   %19s  %10u bytes  %10u bytes  %4d%%  %08x  %s\n",Header.file_name,TransformMSDOSdate2str(Header.last_mod_time),Header.original_size,Header.compressed_size,CompressionRatio(Header.compressed_size,Header.original_size),Header.original_crc,methods[(int)Header.compression_method-1]);
+	printf("%-16s  %19s  %10u bytes  %10u bytes  %4d%%  %08x  %s\n",Header.file_name,TransformMSDOSdate2str(Header.last_mod_time),Header.original_size,Header.compressed_size,CompressionRatio(Header.compressed_size,Header.original_size),Header.original_crc,methods[(int)Header.compression_method-1]);
 }
 
 int CompressionRatio(ull compressed,ull original){
@@ -663,4 +672,52 @@ int CompressionRatio(ull compressed,ull original){
 		return 0;	
 	}
 	return (int)((1-(double)compressed/original)*100);
+}
+
+//LZ4圧縮処理APIを呼び出す
+//圧縮後のサイズを返す
+//圧縮後のサイズが元のサイズよりも大きくなった場合は0を返す
+int lz4CompressRequest(FILE *input_text_file){
+	char *src=(char*)malloc(sizeof(char)*Header.original_size);
+	if(fread(src,1,Header.original_size,input_text_file)!=Header.original_size){
+		fprintf(stderr,"入力ファイルの読み込みに失敗しました\n");
+		exit(1);	
+	}
+	Header.original_crc=CRC_MASK;
+	Header.original_crc=CalculateCRC32(Header.original_size,Header.original_crc,src);
+	Header.original_crc^=CRC_MASK;
+	int capacity=Header.original_size;
+	char *dst=(char*)malloc(sizeof(char)*capacity);
+	int compressed_size=LZ4_compress_default(src,dst,Header.original_size,capacity);	
+	if(fwrite(dst,1,compressed_size,OutputCarFile)!=compressed_size){
+		fprintf(stderr,"圧縮データの書き込みに失敗しました\n");
+		exit(1);	
+	}
+	free(src);
+	free(dst);
+	return Header.compressed_size=compressed_size;	
+}
+
+//LZ4展開処理APIを呼び出す
+//CRCチェックサムを返す
+uint32_t lz4ExpandRequest(FILE *output){
+	char *src=(char*)malloc(sizeof(char)*Header.compressed_size);
+	if(fread(src,1,Header.compressed_size,InputCarFile)!=Header.compressed_size){
+		fprintf(stderr,"入力ファイルの読み込みに失敗しました\n");
+		exit(1);	
+	}
+	
+	char *dst=(char*)malloc(sizeof(char)*Header.original_size);
+	LZ4_decompress_safe(src,dst,Header.compressed_size,Header.original_size);
+	if(fwrite(dst,1,Header.original_size,output)!=Header.original_size){
+		fprintf(stderr,"展開データの書き込みに失敗しました\n");
+		exit(1);	
+	}
+
+	uint32_t crc=CRC_MASK;
+	crc=CalculateCRC32(Header.original_size,crc,dst);
+	free(src);
+	free(dst);
+
+	return crc^CRC_MASK;
 }
