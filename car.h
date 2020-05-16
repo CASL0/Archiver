@@ -17,7 +17,7 @@
 #define TIMESTAMP_MIN_BIT 6
 #define TIMESTAMP_SEC_BIT 6
 #define DATE_LENGTH 20
-
+#define DEFAULT_METHOD LZ4
 
 #ifndef FILENAME_MAX
 #define FILENAME_MAX 128
@@ -25,7 +25,8 @@
 
 enum METHOD{
 	STORED=1,
-	LZSS=2
+	LZSS=2,
+	LZ4=3
 };
 
 
@@ -83,4 +84,7 @@ extern void ListCarFile(void);
 extern int CompressionRatio(unsigned long long compressed,unsigned long long original);
 extern uint32_t TimeStamp(void);
 extern char *TransformMSDOSdate2str(uint32_t last_mod_time);
+
+extern int lz4CompressRequest(FILE *input_text_file);
+extern uint32_t lz4ExpandRequest(FILE *output);
 #endif //CAR_H
