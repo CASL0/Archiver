@@ -7,6 +7,11 @@
 #include <ctype.h>
 #include <stdint.h>
 #include <time.h>
+#include <dirent.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
 
 void usage(void){
 	fprintf(stderr,"CAR -- Compressed ARchiver\n\n"); 
@@ -140,32 +145,102 @@ void OpenArchiveFiles(char *name, int command){
 }
 
 //コマンドライン引数から，アーカイブへ書き込むファイルリストを作成する
+//コマンドライン引数にディレクトリが指定された場合，再帰的にファイルを取得する
 void BuildFileList(int argc, char *argv[], int command){
 	int count=0;
+	struct stat current_ent;
+	int ent_type;
 	if(argc==0){
 		FileList[count++]="*";	
 	}else{
 		for(int i=0;i<argc;i++){
-			FileList[count]=(char*)malloc(strlen(argv[i])+1);	
-			if(FileList[count]==NULL){
-				fprintf(stderr,"メモリの確保に失敗しました\n");
-				exit(1);	
+			
+			if((ent_type=stat(argv[i],&current_ent))==-1){
+				
+				//addコマンドの場合はファイルが見つからなかった場合はスキップする
+				if(command=='a'){	
+					fprintf(stderr,"不明なエントリー：%s\n",argv[i]);	
+					continue;
+			
+				//addコマンド以外の場合はアーカイブ中にしか存在しないファイルを指定できる
+				}else{
+					AddStr2FileList(argv[i],&count);		
+				}
 			}
-			strcpy(FileList[count++],argv[i]);	
-			if(count>=FILE_LIST_MAX){
-				fprintf(stderr,"ファイルが多すぎます\n");
-				exit(1);	
+
+			//ファイルの場合，そのままファイルリストに登録する	
+			if(S_ISREG(current_ent.st_mode)){
+				AddStr2FileList(argv[i],&count);
+
+			//ディレクトリの場合，再帰的にファイルを取得しファイルリストに登録する	
+			}else if(S_ISDIR(current_ent.st_mode)){
+				TraverseDir(argv[i],&count);
 			}
 		}
 	}
 	FileList[count]=NULL;	
 }
 
+//文字列をファイルリストに追加する
+//addコマンドの場合はフルパスで与えられることもある
+void AddStr2FileList(char *str,int *count){
+	FileList[*count]=(char*)malloc(sizeof(char)*strlen(str)+1);
+	if(FileList[*count]==NULL){
+		fprintf(stderr,"メモリの確保に失敗しました\n");
+		exit(1);	
+	}
+	strcpy(FileList[(*count)++],str);
+	if(*count>=FILE_LIST_MAX){
+		fprintf(stderr,"ファイルが多すぎます\n");
+		exit(1);	
+	}
+}
+
+
+//引数のパスで与えられたディレクトリ中のファイルを再帰的に取得する
+void TraverseDir(const char *current_path,int *count){
+	DIR *dir;
+	if((dir=opendir(current_path))==NULL){
+		fprintf(stderr,"ディレクトリ%sを開けませんでした\n",current_path);
+		exit(1);	
+	}
+	int path_len=strlen(current_path);
+	char path[FILENAME_MAX];
+	strncpy(path,current_path,FILENAME_MAX);
+	
+	if(path[path_len-1]!='/'){
+		path[path_len++]='/';
+		path[path_len]='\0';	
+	}
+	struct dirent *entry;	
+	while((entry=readdir(dir))!=NULL){
+		const char *name=entry->d_name;	
+	
+		//カレントディレクトリおよび親ディレクトリは無視する	
+		if(name[0]=='.' && name[1+(name[1]=='.')]=='\0'){
+			continue;	
+		}
+		
+		//現在のパスの末尾にエントリーを追記する	
+		strncpy(&path[path_len],name,FILENAME_MAX-path_len);
+		
+		//ディレクトリの場合は子要素に対して同様の処理
+		if(entry->d_type==DT_DIR){
+			TraverseDir(path,count);	
+		
+		//ファイルの場合はファイルリストに登録する
+		}else if(entry->d_type==DT_REG){
+			AddStr2FileList(path,count);	
+		}
+	}
+	closedir(dir);
+}
+
 //リスト内のファイルを出力アーカイブファイルに追加する
 //パス情報はすべて取り除く
 //ファイルが重複していた場合スキップする
 //追加したファイル数を返す
-int AddFileList(void){
+int AddFileList2Archive(void){
 	FILE *input_text_file;	
 	int i=0;
 	for(;FileList[i]!=NULL;i++){

@@ -14,7 +14,7 @@ int main(int argc,char *argv[]){
 	BuildFileList(argc-3,argv+3,command);	
 	int count=0;
 	if(command=='a'){
-		count=AddFileList();	
+		count=AddFileList2Archive();	
 	}
 	
 	if(command=='l'){
