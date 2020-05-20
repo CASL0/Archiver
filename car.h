@@ -64,7 +64,7 @@ extern uint32_t UpdateCharacterCRC32(uint32_t crc, int c);
 extern int ParseArguments(int argc,char *argv[]);
 extern void OpenArchiveFiles(char *name, int command);
 extern void BuildFileList(int argc, char *argv[], int command);
-extern int AddFileList(void); 
+extern int AddFileList2Archive(void); 
 extern void insert(FILE *input_text_file,char *operation);
 extern void WriteFileHeader(void);
 extern void pack(int num_bytes,uint32_t number, unsigned char *buffer);
@@ -84,7 +84,8 @@ extern void ListCarFile(void);
 extern int CompressionRatio(unsigned long long compressed,unsigned long long original);
 extern uint32_t TimeStamp(void);
 extern char *TransformMSDOSdate2str(uint32_t last_mod_time);
-
+extern void TraverseDir(const char *current_path,int *count);
+extern void AddStr2FileList(char *str,int *count);
 extern int lz4CompressRequest(FILE *input_text_file);
 extern uint32_t lz4ExpandRequest(FILE *output);
 #endif //CAR_H
