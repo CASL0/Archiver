@@ -1,6 +1,7 @@
-#include "third-party/lz4.h"
+#include "externals/lz4/lib/lz4.h"
+#include "externals/zlib/zlib.h"
+#include "externals/zstd/lib/zstd.h"
 #include "car.h"
-#include "lzss.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -348,7 +349,7 @@ void insert(FILE *input_text_file,char *operation){
 	
 	Header.last_mod_time=TimeStamp();
 
-	int (*compress[])()={LZSSCompress,lz4CompressRequest};
+	int (*compress[])()={zstdCompressRequest,lz4CompressRequest,deflateCompressRequest};
 
 	//圧縮後にサイズが拡大した場合は，元のデータを書き込む
 	if(!(*compress[selected_method])(input_text_file)){
@@ -693,13 +694,16 @@ void extract(FILE *destination){
 			break;	
 	
 		//圧縮データの場合は展開して取り出す	
-		case LZSS:
-			crc=LZSSExpand(output_text_file);
+		case ZSTD:
+			crc=zstdExpandRequest(output_text_file);
 			break;	
 	
 		case LZ4:
 			crc=lz4ExpandRequest(output_text_file);
 			break;	
+		case DEFLATE:
+			crc=deflateExpandRequest(output_text_file);	
+			break;
 		default:
 			fprintf(stderr,"不明なメソッド: %c\n",Header.compression_method);
 			SkipOverFile();
@@ -737,7 +741,7 @@ void PrintTitle(void){
 }
 
 void ListCarFile(void){
-	static char *methods[]={"stored","LZSS","LZ4"};
+	static char *methods[]={"stored","zstd","LZ4","deflate"};
 	
 	printf("%-16s  %19s  %10u bytes  %10u bytes  %4d%%  %08x  %s\n",Header.file_name,TransformMSDOSdate2str(Header.last_mod_time),Header.original_size,Header.compressed_size,CompressionRatio(Header.compressed_size,Header.original_size),Header.original_crc,methods[(int)Header.compression_method-1]);
 }
@@ -784,6 +788,117 @@ uint32_t lz4ExpandRequest(FILE *output){
 	
 	char *dst=(char*)malloc(sizeof(char)*Header.original_size);
 	LZ4_decompress_safe(src,dst,Header.compressed_size,Header.original_size);
+	if(fwrite(dst,1,Header.original_size,output)!=Header.original_size){
+		fprintf(stderr,"展開データの書き込みに失敗しました\n");
+		exit(1);	
+	}
+
+	uint32_t crc=CRC_MASK;
+	crc=CalculateCRC32(Header.original_size,crc,dst);
+	free(src);
+	free(dst);
+
+	return crc^CRC_MASK;
+}
+
+//deflate圧縮処理APIを呼び出す
+//圧縮後のサイズを返す
+//圧縮後のサイズが元のサイズよりも大きくなった場合は0を返す
+int deflateCompressRequest(FILE *input_text_file){
+	unsigned char *src=(unsigned char*)malloc(sizeof(char)*Header.original_size+1);
+	if(fread(src,1,Header.original_size,input_text_file)!=Header.original_size){
+		fprintf(stderr,"入力ファイルの読み込みに失敗しました\n");
+		exit(1);	
+	}
+	Header.original_crc=CRC_MASK;
+	Header.original_crc=CalculateCRC32(Header.original_size,Header.original_crc,src);
+	Header.original_crc^=CRC_MASK;
+	unsigned long capacity=Header.original_size*1.001+13;
+	unsigned char *dst=(unsigned char*)malloc(sizeof(char)*capacity);
+	int deflate_result=compress(dst,&capacity,src,Header.original_size); 
+	if(deflate_result==Z_MEM_ERROR){
+		fprintf(stderr,"メモリの確保に失敗しました\n");
+		exit(1);	
+	}	
+	if(Header.original_size<capacity){
+		free(src);
+		free(dst);
+		return Header.compressed_size=0;	
+	}
+	if(fwrite(dst,1,capacity,OutputCarFile)!=capacity){
+		fprintf(stderr,"圧縮データの書き込みに失敗しました\n");
+		exit(1);	
+	}
+	free(src);
+	free(dst);
+	return Header.compressed_size=capacity;
+}
+
+//deflate展開処理APIを呼び出す
+//CRCチェックサムを返す
+uint32_t deflateExpandRequest(FILE *output){
+	unsigned char *src=(unsigned char*)malloc(sizeof(char)*Header.compressed_size);
+	if(fread(src,1,Header.compressed_size,InputCarFile)!=Header.compressed_size){
+		fprintf(stderr,"入力ファイルの読み込みに失敗しました\n");
+		exit(1);	
+	}
+	
+	unsigned char *dst=(unsigned char*)malloc(sizeof(char)*Header.original_size);
+	unsigned long original_size;
+	uncompress(dst,&original_size,src,Header.compressed_size);
+	Header.original_size=(uint32_t)original_size;
+	if(fwrite(dst,1,Header.original_size,output)!=Header.original_size){
+		fprintf(stderr,"展開データの書き込みに失敗しました\n");
+		exit(1);	
+	}
+
+	uint32_t crc=CRC_MASK;
+	crc=CalculateCRC32(Header.original_size,crc,dst);
+	free(src);
+	free(dst);
+	return crc^CRC_MASK;
+}
+
+//zstd圧縮処理APIを呼び出す
+//圧縮後のサイズを返す
+//圧縮後のサイズが元のサイズよりも大きくなった場合は0を返す
+int zstdCompressRequest(FILE *input_text_file){
+	char *src=(char*)malloc(sizeof(char)*Header.original_size);
+	if(fread(src,1,Header.original_size,input_text_file)!=Header.original_size){
+		fprintf(stderr,"入力ファイルの読み込みに失敗しました\n");
+		exit(1);	
+	}
+	Header.original_crc=CRC_MASK;
+	Header.original_crc=CalculateCRC32(Header.original_size,Header.original_crc,src);
+	Header.original_crc^=CRC_MASK;
+	int capacity=ZSTD_compressBound(Header.original_size);
+	char *dst=(char*)malloc(sizeof(char)*capacity);
+	int compressed_size=ZSTD_compress(dst,capacity,src,Header.original_size,ZSTD_CLEVEL_DEFAULT);
+	if(Header.original_size<compressed_size){
+		free(src);
+		free(dst);
+		return Header.compressed_size=0;	
+	}
+	if(fwrite(dst,1,compressed_size,OutputCarFile)!=compressed_size){
+		fprintf(stderr,"圧縮データの書き込みに失敗しました\n");
+		exit(1);	
+	}
+	free(src);
+	free(dst);
+	return Header.compressed_size=compressed_size;
+}
+
+//zstd展開処理APIを呼び出す
+//CRCチェックサムを返す
+uint32_t zstdExpandRequest(FILE *output){
+	char *src=(char*)malloc(sizeof(char)*Header.compressed_size);
+	if(fread(src,1,Header.compressed_size,InputCarFile)!=Header.compressed_size){
+		fprintf(stderr,"入力ファイルの読み込みに失敗しました\n");
+		exit(1);	
+	}
+	
+	char *dst=(char*)malloc(sizeof(char)*Header.original_size);
+	ZSTD_decompress(dst,Header.original_size,src,Header.compressed_size);
 	if(fwrite(dst,1,Header.original_size,output)!=Header.original_size){
 		fprintf(stderr,"展開データの書き込みに失敗しました\n");
 		exit(1);	

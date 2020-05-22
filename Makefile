@@ -1,13 +1,21 @@
-OBJ=main.o car.o lzss.o lz4.o 
-all:${OBJ}
-	gcc ${OBJ} -ocar
-main.o:
+OBJ=main.o car.o   
+LIBS=./externals/lz4/lib/liblz4.a ./externals/zlib/libz.a ./externals/zstd/lib/libzstd.a
+SUBMODULE=submodule_zlib submodule_lz4 submodule_zstd
+all:${OBJ} ${SUBMODULE} 
+	gcc -ocar ${LIBS} ${OBJ} 
+main.o:main.c car.h
 	gcc main.c -c
-car.o:
+car.o:car.c
 	gcc car.c -c 
-lzss.o:
-	gcc lzss.c -c
-lz4.o:
-	gcc ./third-party/lz4.c -c
+car.o:car.h
 clean:
-	rm -f *.o car 
+	rm -f *.o car
+	cd externals/lz4/lib && ${MAKE} clean 
+	cd externals/zlib && ./configure && ${MAKE} clean 
+	cd externals/zstd/lib && ${MAKE} clean  
+submodule_zlib:
+	cd externals/zlib && ./configure && ${MAKE} libz.a
+submodule_lz4:
+	cd externals/lz4/lib && ${MAKE} liblz4.a
+submodule_zstd:
+	cd externals/zstd/lib && ${MAKE} libzstd.a 
