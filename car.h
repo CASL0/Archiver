@@ -17,16 +17,19 @@
 #define TIMESTAMP_MIN_BIT 6
 #define TIMESTAMP_SEC_BIT 6
 #define DATE_LENGTH 20
-#define DEFAULT_METHOD LZ4
+#define DEFAULT_METHOD ZSTD
 
 #ifndef FILENAME_MAX
 #define FILENAME_MAX 128
 #endif //FILENAME_MAX
 
+typedef unsigned long long ull;
+
 enum METHOD{
 	STORED=1,
-	LZSS=2,
-	LZ4=3
+	ZSTD=2,
+	LZ4=3,
+	DEFLATE=4
 };
 
 
@@ -88,4 +91,8 @@ extern void TraverseDir(const char *current_path,int *count);
 extern void AddStr2FileList(char *str,int *count);
 extern int lz4CompressRequest(FILE *input_text_file);
 extern uint32_t lz4ExpandRequest(FILE *output);
+extern int deflateCompressRequest(FILE *input_text_file);
+extern uint32_t deflateExpandRequest(FILE *output);
+extern int zstdCompressRequest(FILE *input_text_file);
+extern uint32_t zstdExpandRequest(FILE *output);
 #endif //CAR_H
