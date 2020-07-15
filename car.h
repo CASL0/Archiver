@@ -1,8 +1,20 @@
 #ifndef CAR_H
 #define CAR_H
 
-#include <stdio.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <time.h>
+#include <dirent.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include "lz4.h"
+#include "zlib.h"
+#include "zstd.h"
+
 
 #define CRC_MASK 0xffffffff
 #define CRC32_POLYNOMIAL 0xedb88320

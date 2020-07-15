@@ -1,17 +1,4 @@
-#include "externals/lz4/lib/lz4.h"
-#include "externals/zlib/zlib.h"
-#include "externals/zstd/lib/zstd.h"
 #include "car.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <ctype.h>
-#include <stdint.h>
-#include <time.h>
-#include <dirent.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
 
 void usage(void){
